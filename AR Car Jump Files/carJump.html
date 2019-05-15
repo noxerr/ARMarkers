@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>WebAR Prototype</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+		<meta http-equiv="Pragma" content="no-cache" />
+		<meta http-equiv="Expires" content="0" />
+		<style>
+			body {
+				font-family: Monospace;
+				background-color: #000;
+				color: #fff;
+				margin: 0px;
+				overflow: hidden;
+			}
+		</style>
+	</head>
+
+	<body>
+		<script src="js/three.min.js"></script>
+		<script src="js/WebGL.js"></script>
+		<script src="js/ar.min.js"></script>
+		<script src="js/GLTFLoader.js"></script>
+	
+  <script>
+		if (WEBGL.isWebGLAvailable() === false) 
+		{
+			document.body.appendChild(WEBGL.getWebGLErrorMessage());
+		}
+		var container, arToolkitSource, arToolkitContext;
+		var camera, scene, renderer, light, anim;
+		var missedFrames = 0;
+		var clock = new THREE.Clock();
+		var patternPath = 'data/pattern-marker.patt';
+		var debug = false;
+
+		var mixers = [];
+
+		init();
+		if (!debug) initAR();
+		animate();
+		
+		function touchstart( event ) {
+		    anim.reset();
+		}
+
+		function init() {
+			
+			container = document.createElement('div');
+			document.body.appendChild( container );
+			document.addEventListener( 'touchstart', touchstart, false );
+            //document.addEventListener( 'mousedown', onMouseDown, false );
+			scene = new THREE.Scene();				
+			
+			if (debug) {
+				camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000 );
+				camera.position.set(0,21.1,25.5); // Set position like this
+				camera.lookAt(new THREE.Vector3(0,0,0));
+			}
+			else camera = new THREE.Camera();
+			
+			scene.add(camera);
+
+			light = new THREE.DirectionalLight(0xffffff, 1.4);
+			light.position.set( -15, 10, 1 );
+			light.shadow.radius = 1.75;
+			light.castShadow = true;
+			light.shadowCameraVisible = true;
+			scene.add( light );
+
+			var ambLight = new THREE.AmbientLight( 0xA0A0A0, 1.2 ); // soft white light
+			scene.add( ambLight );
+
+
+			// model			
+			var glLoader = new THREE.GLTFLoader();
+
+			glLoader.load('data/mclarenFake.glb', function(gltf) { //((i%2 == 0) ? '1.glb' : '2.glb')
+				object = gltf.scene;//.children[0];
+				object.mixer = new THREE.AnimationMixer(object); //START COMMENT
+				mixers.push(object.mixer);
+				let action = object.mixer.clipAction(gltf.animations[0]);
+				action.play(); //FINISH COMMENT
+				object.castShadow = true;
+				object.traverse(function(child) {
+					if (child.isMesh) {
+						child.castShadow = true;
+						child.receiveShadow = true;
+						if (child.name == 'Plane' || child.name == 'Plane.001'){
+							child.castShadow = false;
+							child.receiveShadow = false;
+						}
+					}
+				});
+				object.scale.set(2.5, 2.5, 2.5);
+				action.timeScale = 0.6;
+				anim = action;
+				scene.add(object);
+			});
+
+			renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance"});
+			//renderer.setPixelRatio(2);
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.setClearColor(new THREE.Color('lightgrey'), debug ? 1 : 0); //CHANGE TO 0
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			renderer.shadowMap.enabled = true;
+			//renderer.gammaOutput = true;
+			container.appendChild(renderer.domElement);
+
+			window.addEventListener('resize', onWindowResize, false);
+
+			if (!debug) scene.visible = false;
+		}
+
+
+		function animate() {
+
+			requestAnimationFrame( animate );
+			//console.log(renderer.info.render.calls);
+			if (!debug){
+				if(arToolkitSource.ready === false)
+				{
+					return;
+				}
+				
+				arToolkitContext.update(arToolkitSource.domElement);
+				// update scene.visible if the marker is seen
+				if (camera.visible)
+				{
+					scene.visible = camera.visible;
+					missedFrames = 0;
+				}
+				else
+				{
+					missedFrames += 1;
+					if (missedFrames > 10)
+					{
+						scene.visible = false;
+					}
+				}
+			}
+			if (mixers.length > 0) 
+			{ 
+				const delta = clock.getDelta();
+				for (var i = 0; i < mixers.length; i++) 
+				{
+					mixers[i].update(delta);
+				}
+			}
+			renderer.render( scene, camera );
+		}
+
+		function initAR()
+		{
+			arToolkitSource = new THREEx.ArToolkitSource({
+				sourceType : 'webcam',
+			});
+
+			arToolkitSource.init(function onReady(){
+				onWindowResize();
+			});
+
+			arToolkitContext = new THREEx.ArToolkitContext({
+				cameraParametersUrl: 'data/camera_para.dat',
+				detectionMode: 'mono',
+				patternRatio: 0.6,
+			});
+			
+			arToolkitContext.init(function onCompleted(){
+				camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+			});
+
+			// init controls for camera
+			var markerControls = new THREEx.ArMarkerControls(arToolkitContext, camera, {
+				type : 'pattern',
+				patternUrl : patternPath,
+				changeMatrixMode: 'cameraTransformMatrix',
+				minConfidence: 0.4
+			});
+		}
+
+
+		function onWindowResize() {
+			if (debug){
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			}
+			else {
+				arToolkitSource.onResizeElement();
+				arToolkitSource.copyElementSizeTo(renderer.domElement);
+				if(arToolkitContext.arController !== null)
+				{
+					arToolkitSource.copyElementSizeTo(arToolkitContext.arController.canvas);
+				}
+			}
+			
+
+		}
+		</script>
+</body>
+</html>
